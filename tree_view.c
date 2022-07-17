@@ -1,15 +1,18 @@
 #include <yed/plugin.h>
 
-#define IS_FILE  0
-#define IS_DIR   1
-#define IS_ROOT -1
+#define IS_ROOT   -1
+#define IS_FILE    0
+#define IS_DIR     1
+#define IS_IMAGE   2
+#define IS_ARCHIVE 3
+#define MAYBE_CONVERT(rgb) (tc ? (rgb) : rgb_to_256(rgb))
 
 /* global structs */
 typedef struct {
     struct file *parent;
     char         path[512];
     char         name[512];
-    int          if_dir;
+    int          flags;
     int          num_tabs;
     int          open_children;
     int          color_loc;
@@ -18,6 +21,8 @@ typedef struct {
 /* global vars */
 static yed_plugin *Self;
 static array_t     hidden_items;
+static array_t     image_extensions;
+static array_t     archive_extensions;
 static array_t     files;
 
 /* internal functions*/
@@ -32,6 +37,9 @@ static void        _tree_view_unload(yed_plugin *self);
 
 /* internal helper functions */
 static yed_buffer *_get_or_make_buff(void);
+static void        _add_hidden_items(void);
+static void        _add_archive_extensions(void);
+static void        _add_image_extensions(void);
 static void        _clear_files(void);
 static file       *_init_file(int parent_idx, char *path, char *name,
                               int if_dir, int num_tabs, int color_loc);
@@ -56,6 +64,14 @@ int yed_plugin_boot(yed_plugin *self) {
         yed_set_var("tree-view-hidden-items", "");
     }
 
+    if (yed_get_var("tree-view-image-extensions") == NULL) {
+        yed_set_var("tree-view-image-extensions", "");
+    }
+
+    if (yed_get_var("tree-view-archive-extensions") == NULL) {
+        yed_set_var("tree-view-archive-extensions", "");
+    }
+
     if (yed_get_var("tree-view-child-char-l") == NULL) {
         yed_set_var("tree-view-child-char-l", "└");
     }
@@ -76,24 +92,12 @@ int yed_plugin_boot(yed_plugin *self) {
 }
 
 static void _tree_view(int n_args, char **args) {
-    char       *token;
-    char       *tmp;
-    const char  s[2] = " ";
-
     if (array_len(files) == 0) {
         files = array_make(file *);
 
-        if (array_len(hidden_items) > 0) {
-            array_clear(hidden_items);
-        }
-        hidden_items = array_make(char *);
-        token = strtok(yed_get_var("tree-view-hidden-items"), s);
-
-        while(token != NULL) {
-            tmp = strdup(token);
-            array_push(hidden_items, tmp);
-            token = strtok(NULL, s);
-        }
+        _add_hidden_items();
+        _add_archive_extensions();
+        _add_image_extensions();
 
         _tree_view_init();
     }
@@ -163,9 +167,6 @@ static void _tree_view_add_dir(int idx) {
             if (strstr(de->d_name, (*str_it))) {
                 goto cont;
             }
-/*             if (strcmp(de->d_name, (*str_it)) == 0) { */
-/*                 goto cont; */
-/*             } */
         }
 
         if (new_idx > 1) {
@@ -222,11 +223,25 @@ skip:;
             }
         }
 
-        if (dir) {
-            new_f = _init_file(idx, path, name, IS_DIR, tabs, color_loc);
-        } else {
-            new_f = _init_file(idx, path, name, IS_FILE, tabs, color_loc);
+        if (dir == 0) {
+            array_traverse(archive_extensions, str_it) {
+                if (strstr(de->d_name, (*str_it))) {
+                    dir = IS_ARCHIVE;
+                    break;
+                }
+            }
         }
+
+        if (dir == 0) {
+            array_traverse(image_extensions, str_it) {
+                if (strstr(de->d_name, (*str_it))) {
+                    dir = IS_IMAGE;
+                    break;
+                }
+            }
+        }
+
+        new_f = _init_file(idx, path, name, dir, tabs, color_loc);
 
         if (new_idx >= array_len(files)) {
             array_push(files, new_f);
@@ -272,11 +287,11 @@ static void _tree_view_remove_dir(int idx) {
 }
 
 static void _tree_view_select(void) {
-    file     *f;
+    file *f;
 
     f = *(file **)array_item(files, ys->active_frame->cursor_line);
 
-    if (f->if_dir == IS_DIR) {
+    if (f->flags == IS_DIR) {
         if (f->open_children) {
             _tree_view_remove_dir(ys->active_frame->cursor_line);
         } else {
@@ -289,19 +304,24 @@ static void _tree_view_select(void) {
 }
 
 static void _tree_view_line_handler(yed_event *event) {
-    yed_frame *frame;
-    yed_attrs *ait;
-    file      *f;
-    yed_attrs *attr_tmp;
-    yed_attrs  attr_dir;
-    yed_attrs  attr_exec;
-    yed_attrs  attr_symb_link;
-    yed_attrs  attr_device;
-    yed_attrs  attr_graphic_img;
-    yed_attrs  attr_archive;
-    yed_attrs  attr_broken_link;
-    yed_attrs  attr_file;
-    int        loc;
+    yed_frame  *frame;
+    yed_attrs  *ait;
+    file       *f;
+    yed_attrs  *attr_tmp;
+    yed_attrs   attr_dir;
+    yed_attrs   attr_exec;
+    yed_attrs   attr_symb_link;
+    yed_attrs   attr_device;
+    yed_attrs   attr_graphic_img;
+    yed_attrs   attr_archive;
+    yed_attrs   attr_broken_link;
+    yed_attrs   attr_file;
+    yed_attrs   attr_lines;
+    struct stat statbuf;
+    char        buf[1024];
+    int         loc;
+    int         tc;
+    int         len;
 
     if (event->frame         == NULL
     ||  event->frame->buffer == NULL
@@ -325,33 +345,96 @@ static void _tree_view_line_handler(yed_event *event) {
     attr_archive     = ZERO_ATTR;
     attr_broken_link = ZERO_ATTR;
     attr_file        = ZERO_ATTR;
+    attr_lines       = ZERO_ATTR;
 
-/*     attr_dir = yed_active_style_get_code_string(); */
-    attr_dir.flags      = ATTR_16 | ATTR_16_LIGHT_FG;
-    attr_dir.fg         = ATTR_16_BLUE;
+    tc = !!yed_get_var("truecolor");
 
-/*     attr_exec = yed_active_style_get_code_string(); */
-    attr_exec.flags      = ATTR_16 | ATTR_16_LIGHT_FG;
-    attr_exec.fg         = ATTR_16_GREEN;
+    attr_dir = yed_active_style_get_code_string();
+    if (attr_dir.flags & ATTR_16) {
+        attr_dir.flags = ATTR_16_LIGHT_FG;
+        attr_dir.fg    = ATTR_16_BLUE;
+    } else if (attr_dir.flags & ATTR_256) {
+        attr_dir.fg    = MAYBE_CONVERT(RGB_32_hex(0080FF));
+    } else if (attr_dir.flags & ATTR_RGB) {
+        attr_dir.fg    = MAYBE_CONVERT(RGB_32_hex(0080FF));
+    }
 
-/*     attr_symb_link = yed_active_style_get_code_string(); */
-    attr_symb_link.flags      = ATTR_16 | ATTR_16_LIGHT_FG;
-    attr_symb_link.fg         = ATTR_16_CYAN;
 
-/*     attr_device = yed_active_style_get_code_string(); */
-    attr_device.flags      = ATTR_16 | ATTR_16_LIGHT_FG;
-    attr_device.fg         = ATTR_16_YELLOW;
-    attr_device.bg         = ATTR_16_BLACK;
+    attr_exec = yed_active_style_get_code_string();
+    if (attr_exec.flags & ATTR_16) {
+        attr_exec.flags = ATTR_16_LIGHT_FG;
+        attr_exec.fg    = ATTR_16_GREEN;
+    } else if (attr_exec.flags & ATTR_256) {
+        attr_exec.fg    = MAYBE_CONVERT(RGB_32_hex(00CC00));
+    } else if (attr_exec.flags & ATTR_RGB) {
+        attr_exec.fg    = MAYBE_CONVERT(RGB_32_hex(00CC00));
+    }
 
-    attr_graphic_img = ZERO_ATTR;
-    attr_archive     = ZERO_ATTR;
+    attr_symb_link = yed_active_style_get_code_string();
+    if (attr_symb_link.flags & ATTR_16) {
+        attr_symb_link.flags = ATTR_16_LIGHT_FG;
+        attr_symb_link.fg    = ATTR_16_GREEN;
+    } else if (attr_symb_link.flags & ATTR_256) {
+        attr_symb_link.fg    = MAYBE_CONVERT(RGB_32_hex(66FFFF));
+    } else if (attr_symb_link.flags & ATTR_RGB) {
+        attr_symb_link.fg    = MAYBE_CONVERT(RGB_32_hex(66FFFF));
+    }
+
+    attr_device = yed_active_style_get_code_string();
+    if (attr_device.flags & ATTR_16) {
+        attr_device.flags = ATTR_16_LIGHT_FG;
+        attr_device.fg    = ATTR_16_YELLOW;
+        attr_device.bg    = ATTR_16_BLACK;
+    } else if (attr_device.flags & ATTR_256) {
+        attr_device.fg    = MAYBE_CONVERT(RGB_32_hex(FFFF33));
+        attr_device.bg    = MAYBE_CONVERT(RGB_32_hex(000000));
+    } else if (attr_device.flags & ATTR_RGB) {
+        attr_device.fg    = MAYBE_CONVERT(RGB_32_hex(FFFF33));
+        attr_device.bg    = MAYBE_CONVERT(RGB_32_hex(000000));
+    }
+
+    attr_file = yed_active_style_get_code_string();
+    if (attr_file.flags & ATTR_16) {
+        attr_file.flags = ATTR_16_LIGHT_FG;
+        attr_file.fg    = ATTR_16_GREY;
+    } else if (attr_file.flags & ATTR_256) {
+        attr_file.fg    = MAYBE_CONVERT(RGB_32_hex(FFFFFF));
+    } else if (attr_file.flags & ATTR_RGB) {
+        attr_file.fg    = MAYBE_CONVERT(RGB_32_hex(FFFFFF));
+    }
+
+    attr_lines = yed_active_style_get_code_string();
+    if (attr_lines.flags & ATTR_16) {
+        attr_lines.flags = ATTR_16_LIGHT_FG;
+        attr_lines.fg    = ATTR_16_GREY;
+    } else if (attr_lines.flags & ATTR_256) {
+        attr_lines.fg    = MAYBE_CONVERT(RGB_32_hex(FFFFFF));
+    } else if (attr_lines.flags & ATTR_RGB) {
+        attr_lines.fg    = MAYBE_CONVERT(RGB_32_hex(FFFFFF));
+    }
+
+    attr_graphic_img = yed_active_style_get_code_string();
+    if (attr_graphic_img.flags & ATTR_16) {
+        attr_graphic_img.flags = ATTR_16_LIGHT_FG;
+        attr_graphic_img.fg    = ATTR_16_MAGENTA;
+    } else if (attr_graphic_img.flags & ATTR_256) {
+        attr_graphic_img.fg    = MAYBE_CONVERT(RGB_32_hex(FF33FF));
+    } else if (attr_graphic_img.flags & ATTR_RGB) {
+        attr_graphic_img.fg    = MAYBE_CONVERT(RGB_32_hex(FF33FF));
+    }
+
+    attr_archive = yed_active_style_get_code_string();
+    if (attr_archive.flags & ATTR_16) {
+        attr_archive.flags = ATTR_16_LIGHT_FG;
+        attr_archive.fg    = ATTR_16_RED;
+    } else if (attr_archive.flags & ATTR_256) {
+        attr_archive.fg    = MAYBE_CONVERT(RGB_32_hex(FF3333));
+    } else if (attr_archive.flags & ATTR_RGB) {
+        attr_archive.fg    = MAYBE_CONVERT(RGB_32_hex(FF3333));
+    }
+
     attr_broken_link = ZERO_ATTR;
 
-/*     attr_file = yed_active_style_get_code_string(); */
-    attr_file.flags      = ATTR_16 | ATTR_16_LIGHT_FG;
-    attr_file.fg         = ATTR_16_GREY;
-
-    struct stat statbuf;
     if (lstat(f->path, &statbuf) != 0) { return; }
 
     switch (statbuf.st_mode & S_IFMT) {
@@ -359,6 +442,11 @@ static void _tree_view_line_handler(yed_event *event) {
             attr_tmp = &attr_dir;
             break;
         case S_IFLNK:
+            len = readlink(f->path, buf, sizeof(buf)-1);
+            if (len != -1) {
+                buf[len] = '\0';
+            }
+            yed_log("%s -> %s\n", f->path, buf);
             attr_tmp = &attr_symb_link;
             break;
         case S_IFBLK:
@@ -369,7 +457,13 @@ static void _tree_view_line_handler(yed_event *event) {
             if (statbuf.st_mode & S_IXUSR) {
                 attr_tmp = &attr_exec;
             } else {
-                attr_tmp = &attr_file;
+                if (f->flags == IS_ARCHIVE) {
+                    attr_tmp = &attr_archive;
+                } else if (f->flags == IS_IMAGE) {
+                    attr_tmp = &attr_graphic_img;
+                } else {
+                    attr_tmp = &attr_file;
+                }
             }
             break;
     }
@@ -378,6 +472,8 @@ static void _tree_view_line_handler(yed_event *event) {
     array_traverse(event->line_attrs, ait) {
         if (loc > f->color_loc) {
             yed_combine_attrs(ait, attr_tmp);
+        } else {
+            yed_combine_attrs(ait, &attr_lines);
         }
         loc++;
     }
@@ -432,7 +528,7 @@ static file *_init_file(int parent_idx, char *path, char *name, int if_dir, int 
     memset(f->name, sizeof(char[512]), '0');
     strcat(f->name, name);
 
-    f->if_dir        = if_dir;
+    f->flags         = if_dir;
     f->num_tabs      = num_tabs;
     f->open_children = 0;
     f->color_loc     = color_loc;
@@ -446,6 +542,210 @@ static void _clear_files(void) {
         f = *(file **)array_item(files, 0);
         free(f);
         array_delete(files, 0);
+    }
+}
+
+static void _add_hidden_items(void) {
+    char       *token;
+    char       *tmp;
+    const char  s[2] = " ";
+
+    if (array_len(hidden_items) > 0) {
+        array_clear(hidden_items);
+    }
+    hidden_items = array_make(char *);
+    token = strtok(yed_get_var("tree-view-hidden-items"), s);
+    while(token != NULL) {
+        tmp = strdup(token);
+        array_push(hidden_items, tmp);
+        token = strtok(NULL, s);
+    }
+}
+
+static void _add_archive_extensions(void) {
+    char       *token;
+    char       *tmp;
+    char       *str;
+    const char  s[2] = " ";
+
+    if (array_len(archive_extensions) > 0) {
+        array_clear(archive_extensions);
+    }
+    archive_extensions = array_make(char *);
+
+    str = strdup(".a");       array_push(archive_extensions, str);
+    str = strdup(".ar");      array_push(archive_extensions, str);
+    str = strdup(".cpio");    array_push(archive_extensions, str);
+    str = strdup(".shar");    array_push(archive_extensions, str);
+    str = strdup(".LBR");     array_push(archive_extensions, str);
+    str = strdup(".iso");     array_push(archive_extensions, str);
+    str = strdup(".lbr");     array_push(archive_extensions, str);
+    str = strdup(".mar");     array_push(archive_extensions, str);
+    str = strdup(".sbx");     array_push(archive_extensions, str);
+    str = strdup(".tar");     array_push(archive_extensions, str);
+    str = strdup(".br");      array_push(archive_extensions, str);
+    str = strdup(".bz2");     array_push(archive_extensions, str);
+    str = strdup(".F");       array_push(archive_extensions, str);
+    str = strdup(".gz");      array_push(archive_extensions, str);
+    str = strdup(".lz");      array_push(archive_extensions, str);
+    str = strdup(".lz4");     array_push(archive_extensions, str);
+    str = strdup(".lzma");    array_push(archive_extensions, str);
+    str = strdup(".lzo");     array_push(archive_extensions, str);
+    str = strdup(".rz");      array_push(archive_extensions, str);
+    str = strdup(".sfark");   array_push(archive_extensions, str);
+    str = strdup(".sz");      array_push(archive_extensions, str);
+    str = strdup(".xz");      array_push(archive_extensions, str);
+    str = strdup(".z");       array_push(archive_extensions, str);
+    str = strdup(".Z");       array_push(archive_extensions, str);
+    str = strdup(".zst");     array_push(archive_extensions, str);
+    str = strdup(".7z");      array_push(archive_extensions, str);
+    str = strdup(".s7z");     array_push(archive_extensions, str);
+    str = strdup(".ace");     array_push(archive_extensions, str);
+    str = strdup(".afa");     array_push(archive_extensions, str);
+    str = strdup(".alz");     array_push(archive_extensions, str);
+    str = strdup(".apk");     array_push(archive_extensions, str);
+    str = strdup(".arc");     array_push(archive_extensions, str);
+    str = strdup(".ark");     array_push(archive_extensions, str);
+    str = strdup(".cdx");     array_push(archive_extensions, str);
+    str = strdup(".arj");     array_push(archive_extensions, str);
+    str = strdup(".b1");      array_push(archive_extensions, str);
+    str = strdup(".b6z");     array_push(archive_extensions, str);
+    str = strdup(".ba");      array_push(archive_extensions, str);
+    str = strdup(".bh");      array_push(archive_extensions, str);
+    str = strdup(".cab");     array_push(archive_extensions, str);
+    str = strdup(".car");     array_push(archive_extensions, str);
+    str = strdup(".cfs");     array_push(archive_extensions, str);
+    str = strdup(".cpt");     array_push(archive_extensions, str);
+    str = strdup(".dar");     array_push(archive_extensions, str);
+    str = strdup(".dd");      array_push(archive_extensions, str);
+    str = strdup(".dgc");     array_push(archive_extensions, str);
+    str = strdup(".dmg");     array_push(archive_extensions, str);
+    str = strdup(".ear");     array_push(archive_extensions, str);
+    str = strdup(".gca");     array_push(archive_extensions, str);
+    str = strdup(".genozip"); array_push(archive_extensions, str);
+    str = strdup(".ha");      array_push(archive_extensions, str);
+    str = strdup(".hki");     array_push(archive_extensions, str);
+    str = strdup(".ice");     array_push(archive_extensions, str);
+    str = strdup(".jar");     array_push(archive_extensions, str);
+    str = strdup(".kgb");     array_push(archive_extensions, str);
+    str = strdup(".lzh");     array_push(archive_extensions, str);
+    str = strdup(".lha");     array_push(archive_extensions, str);
+    str = strdup(".lzx");     array_push(archive_extensions, str);
+    str = strdup(".pak");     array_push(archive_extensions, str);
+    str = strdup(".partimg"); array_push(archive_extensions, str);
+    str = strdup(".paq6");    array_push(archive_extensions, str);
+    str = strdup(".paz7");    array_push(archive_extensions, str);
+    str = strdup(".paq8");    array_push(archive_extensions, str);
+    str = strdup(".pea");     array_push(archive_extensions, str);
+    str = strdup(".phar");    array_push(archive_extensions, str);
+    str = strdup(".pim");     array_push(archive_extensions, str);
+    str = strdup(".pit");     array_push(archive_extensions, str);
+    str = strdup(".qda");     array_push(archive_extensions, str);
+    str = strdup(".rar");     array_push(archive_extensions, str);
+    str = strdup(".rk");      array_push(archive_extensions, str);
+    str = strdup(".sda");     array_push(archive_extensions, str);
+    str = strdup(".sea");     array_push(archive_extensions, str);
+    str = strdup(".sen");     array_push(archive_extensions, str);
+    str = strdup(".sfx");     array_push(archive_extensions, str);
+    str = strdup(".shk");     array_push(archive_extensions, str);
+    str = strdup(".sit");     array_push(archive_extensions, str);
+    str = strdup(".sitx");    array_push(archive_extensions, str);
+    str = strdup(".sqx");     array_push(archive_extensions, str);
+    str = strdup(".tar.gz");  array_push(archive_extensions, str);
+    str = strdup(".tgz");     array_push(archive_extensions, str);
+    str = strdup(".tar.Z");   array_push(archive_extensions, str);
+    str = strdup(".tar.bz2"); array_push(archive_extensions, str);
+    str = strdup(".tbz2");    array_push(archive_extensions, str);
+    str = strdup(".tar.lz");  array_push(archive_extensions, str);
+    str = strdup(".tlz");     array_push(archive_extensions, str);
+    str = strdup(".tar.xz");  array_push(archive_extensions, str);
+    str = strdup(".txz");     array_push(archive_extensions, str);
+    str = strdup(".tar.zst"); array_push(archive_extensions, str);
+    str = strdup(".uc");      array_push(archive_extensions, str);
+    str = strdup(".uc0");     array_push(archive_extensions, str);
+    str = strdup(".uc2");     array_push(archive_extensions, str);
+    str = strdup(".ucn");     array_push(archive_extensions, str);
+    str = strdup(".ur2");     array_push(archive_extensions, str);
+    str = strdup(".ue2");     array_push(archive_extensions, str);
+    str = strdup(".uca");     array_push(archive_extensions, str);
+    str = strdup(".uha");     array_push(archive_extensions, str);
+    str = strdup(".war");     array_push(archive_extensions, str);
+    str = strdup(".wim");     array_push(archive_extensions, str);
+    str = strdup(".xar");     array_push(archive_extensions, str);
+    str = strdup(".xp3");     array_push(archive_extensions, str);
+    str = strdup(".yz1");     array_push(archive_extensions, str);
+    str = strdup(".zip");     array_push(archive_extensions, str);
+    str = strdup(".zipx");    array_push(archive_extensions, str);
+    str = strdup(".zoo");     array_push(archive_extensions, str);
+    str = strdup(".zpaq");    array_push(archive_extensions, str);
+    str = strdup(".zz");      array_push(archive_extensions, str);
+    str = strdup(".deb");     array_push(archive_extensions, str);
+    str = strdup(".pkg");     array_push(archive_extensions, str);
+    str = strdup(".mpkg");    array_push(archive_extensions, str);
+    str = strdup(".rpm");     array_push(archive_extensions, str);
+    str = strdup(".msi");     array_push(archive_extensions, str);
+    str = strdup(".crx");     array_push(archive_extensions, str);
+
+    token = strtok(yed_get_var("tree-view-archive-extensions"), s);
+    while(token != NULL) {
+        tmp = strdup(token);
+        array_push(archive_extensions, tmp);
+        token = strtok(NULL, s);
+    }
+}
+
+static void _add_image_extensions(void) {
+    char       *token;
+    char       *tmp;
+    char       *str;
+    const char  s[2] = " ";
+
+    if (array_len(image_extensions) > 0) {
+        array_clear(image_extensions);
+    }
+    image_extensions = array_make(char *);
+
+    str = strdup(".jpg");  array_push(image_extensions, str);
+    str = strdup(".jpeg"); array_push(image_extensions, str);
+    str = strdup(".jpe");  array_push(image_extensions, str);
+    str = strdup(".jif");  array_push(image_extensions, str);
+    str = strdup(".jfif"); array_push(image_extensions, str);
+    str = strdup(".jfi");  array_push(image_extensions, str);
+    str = strdup(".png");  array_push(image_extensions, str);
+    str = strdup(".gif");  array_push(image_extensions, str);
+    str = strdup(".webp"); array_push(image_extensions, str);
+    str = strdup(".tiff"); array_push(image_extensions, str);
+    str = strdup(".tif");  array_push(image_extensions, str);
+    str = strdup(".psd");  array_push(image_extensions, str);
+    str = strdup(".raw");  array_push(image_extensions, str);
+    str = strdup(".arw");  array_push(image_extensions, str);
+    str = strdup(".cr2");  array_push(image_extensions, str);
+    str = strdup(".nrw");  array_push(image_extensions, str);
+    str = strdup(".k25");  array_push(image_extensions, str);
+    str = strdup(".bmp");  array_push(image_extensions, str);
+    str = strdup(".dib");  array_push(image_extensions, str);
+    str = strdup(".heif"); array_push(image_extensions, str);
+    str = strdup(".heic"); array_push(image_extensions, str);
+    str = strdup(".ind");  array_push(image_extensions, str);
+    str = strdup(".indd"); array_push(image_extensions, str);
+    str = strdup(".indt"); array_push(image_extensions, str);
+    str = strdup(".jp2");  array_push(image_extensions, str);
+    str = strdup(".j2k");  array_push(image_extensions, str);
+    str = strdup(".jpf");  array_push(image_extensions, str);
+    str = strdup(".jpx");  array_push(image_extensions, str);
+    str = strdup(".jpm");  array_push(image_extensions, str);
+    str = strdup(".mj2");  array_push(image_extensions, str);
+    str = strdup(".svg");  array_push(image_extensions, str);
+    str = strdup(".svgz"); array_push(image_extensions, str);
+    str = strdup(".ai");   array_push(image_extensions, str);
+    str = strdup(".eps");  array_push(image_extensions, str);
+    str = strdup(".pdf");  array_push(image_extensions, str);
+
+    token = strtok(yed_get_var("tree-view-image-extensions"), s);
+    while(token != NULL) {
+        tmp = strdup(token);
+        array_push(image_extensions, tmp);
+        token = strtok(NULL, s);
     }
 }
 
