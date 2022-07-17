@@ -1,20 +1,40 @@
 #include <yed/plugin.h>
 
+#define IS_FILE  0
+#define IS_DIR   1
+#define IS_ROOT -1
+
+/* global structs */
+typedef struct {
+    struct file *parent;
+    char         path[512];
+    char         name[512];
+    int          if_dir;
+    int          num_tabs;
+    int          open_children;
+    int          color_loc;
+} file;
+
 /* global vars */
 static yed_plugin *Self;
 static array_t     hidden_items;
-static array_t     paths;
+static array_t     files;
 
 /* internal functions*/
 static void        _tree_view(int n_args, char **args);
 static void        _tree_view_init(void);
-static void        _tree_view_add_dir(char *dir, int loc);
+static void        _tree_view_add_dir(int idx);
+static void        _tree_view_remove_dir(int idx);
 static void        _tree_view_select(void);
 static void        _tree_view_line_handler(yed_event *event);
-static yed_buffer *_get_or_make_buff(void);
-static int         _count_tabs(int loc);
 static void        _tree_view_key_pressed_handler(yed_event *event);
 static void        _tree_view_unload(yed_plugin *self);
+
+/* internal helper functions */
+static yed_buffer *_get_or_make_buff(void);
+static void        _clear_files(void);
+static file       *_init_file(int parent_idx, char *path, char *name,
+                              int if_dir, int num_tabs, int color_loc);
 
 int yed_plugin_boot(yed_plugin *self) {
     yed_event_handler tree_view_key;
@@ -36,8 +56,16 @@ int yed_plugin_boot(yed_plugin *self) {
         yed_set_var("tree-view-hidden-items", "");
     }
 
-    if (yed_get_var("tree-view-child-char") == NULL) {
-        yed_set_var("tree-view-child-char", " ");
+    if (yed_get_var("tree-view-child-char-l") == NULL) {
+        yed_set_var("tree-view-child-char-l", "└");
+    }
+
+    if (yed_get_var("tree-view-child-char-i") == NULL) {
+        yed_set_var("tree-view-child-char-i", "│");
+    }
+
+    if (yed_get_var("tree-view-child-char-t") == NULL) {
+        yed_set_var("tree-view-child-char-t", "├");
     }
 
     yed_plugin_set_command(self, "tree-view", _tree_view);
@@ -52,24 +80,23 @@ static void _tree_view(int n_args, char **args) {
     char       *tmp;
     const char  s[2] = " ";
 
-    if (array_len(paths) > 0) {
-        array_clear(paths);
-    }
-    paths = array_make(char *);
+    if (array_len(files) == 0) {
+        files = array_make(file *);
 
-    if (array_len(hidden_items) > 0) {
-        array_clear(hidden_items);
-    }
-    hidden_items = array_make(char *);
-    token = strtok(yed_get_var("tree-view-hidden-items"), s);
+        if (array_len(hidden_items) > 0) {
+            array_clear(hidden_items);
+        }
+        hidden_items = array_make(char *);
+        token = strtok(yed_get_var("tree-view-hidden-items"), s);
 
-    while(token != NULL) {
-        tmp = strdup(token);
-        array_push(hidden_items, tmp);
-        token = strtok(NULL, s);
-    }
+        while(token != NULL) {
+            tmp = strdup(token);
+            array_push(hidden_items, tmp);
+            token = strtok(NULL, s);
+        }
 
-    _tree_view_init();
+        _tree_view_init();
+    }
 
     YEXE("special-buffer-prepare-focus", "*tree-view-list");
 
@@ -81,6 +108,7 @@ static void _tree_view(int n_args, char **args) {
 }
 
 static void _tree_view_init(void) {
+    file       *dot;
     yed_buffer *buff;
     char       *tmp;
 
@@ -89,78 +117,125 @@ static void _tree_view_init(void) {
     yed_buff_clear_no_undo(buff);
     buff->flags |= BUFF_RD_ONLY;
 
+    dot = _init_file(IS_ROOT, ".", ",", IS_DIR, -1, 1);
+    array_push(files, dot);
 
-    tmp = strdup(".");
-    array_push(paths, tmp);
-
-    _tree_view_add_dir(".", 0);
-
-    _tree_view_add_dir("./test_dir", 7);
-/*     _tree_view_add_dir("/dev", 0); */
+    _tree_view_add_dir(0);
 }
 
-static void _tree_view_add_dir(char *dir, int loc) {
+static void _tree_view_add_dir(int idx) {
     char          **str_it;
-    char           *tmp_str;
-    char           *dup_str;
-    char           *child_char;
+    file           *f;
+    file           *new_f;
+    file           *prev_f;
     yed_buffer     *buff;
     struct dirent  *de;
     DIR            *dr;
-    char            path[512];
-    char            out_path[512];
-    int             row;
-    int             i;
-    int             new_loc;
+    int             new_idx;
+    int             dir;
     int             tabs;
+    int             first;
+    int             i;
+    int             j;
+    int             color_loc;
+    char            path[512];
+    char            name[512];
+    char            write_name[512];
+    char            new_name[512];
+    struct stat     statbuf;
 
     buff = _get_or_make_buff();
-
-    dr = opendir(dir);
+    f    = *(file **)array_item(files, idx);
+    dr   = opendir(f->path);
 
     if (dr == NULL) { return; }
 
     buff->flags &= ~BUFF_RD_ONLY;
 
-    row = loc+1;
-    new_loc = loc;
+    new_idx = idx+1;
+    first   = 1;
     while ((de = readdir(dr)) != NULL) {
         if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) {
             continue;
         }
 
         array_traverse(hidden_items, str_it) {
-            if (strcmp(de->d_name, (*str_it)) == 0) {
+            if (strstr(de->d_name, (*str_it))) {
                 goto cont;
+            }
+/*             if (strcmp(de->d_name, (*str_it)) == 0) { */
+/*                 goto cont; */
+/*             } */
+        }
+
+        if (new_idx > 1) {
+            yed_buff_insert_line_no_undo(buff, new_idx);
+        }
+
+        f->open_children = 1;
+
+        memset(path, sizeof(char[512]), '0');
+        sprintf(path, "%s/%s", f->path, de->d_name);
+
+        tabs = f->num_tabs+1;
+        memset(name, sizeof(char[512]), '0');
+        memset(write_name, sizeof(char[512]), '0');
+        color_loc = tabs * yed_get_tab_width();
+        if (tabs > 0) {
+            color_loc += 1;
+            for  (i = 0; i < tabs; i++) {
+                strcat(write_name, yed_get_var("tree-view-child-char-i"));
+                for (j = 0; j < yed_get_tab_width()-1; j++) {
+                    strcat(write_name, " ");
+                }
+            }
+            strcat(write_name, yed_get_var("tree-view-child-char-l"));
+        }
+        strcat(write_name, de->d_name);
+        strcat(name, de->d_name);
+
+        if (!first && tabs > 0) {
+            prev_f = *(file **)array_item(files, new_idx-1);
+
+            memset(new_name, sizeof(char[512]), '0');
+            if (tabs > 0) {
+                for  (i = 0; i < tabs; i++) {
+                    strcat(new_name, yed_get_var("tree-view-child-char-i"));
+                    for (j = 0; j < yed_get_tab_width()-1; j++) {
+                        strcat(new_name, " ");
+                    }
+                }
+                strcat(new_name, yed_get_var("tree-view-child-char-t"));
+            }
+            strcat(new_name, prev_f->name);
+            yed_line_clear(buff, new_idx-1);
+            yed_buff_insert_string_no_undo(buff, new_name, new_idx-1, 1);
+        }
+skip:;
+
+        yed_buff_insert_string_no_undo(buff, write_name, new_idx, 1);
+
+        dir = 0;
+        if (lstat(path, &statbuf) == 0) {
+            if (S_ISDIR(statbuf.st_mode)) {
+                dir = 1;
             }
         }
 
-        if (row > 1) {
-            yed_buff_insert_line_no_undo(buff, row);
+        if (dir) {
+            new_f = _init_file(idx, path, name, IS_DIR, tabs, color_loc);
+        } else {
+            new_f = _init_file(idx, path, name, IS_FILE, tabs, color_loc);
         }
 
-        memset(path, sizeof(char[512]), '0');
-        tmp_str = *(char**) array_item(paths, loc);
-        sprintf(path, "%s/%s", tmp_str, de->d_name);
-        dup_str = strdup(path);
-        array_insert(paths, ++new_loc, dup_str);
-
-        memset(out_path, sizeof(char[512]), '0');
-        tabs = _count_tabs(new_loc) * yed_get_tab_width();
-        if (tabs == 0) {
-            tabs = 1;
+        if (new_idx >= array_len(files)) {
+            array_push(files, new_f);
+        } else {
+            array_insert(files, new_idx, new_f);
         }
+        new_idx++;
+        first = 0;
 
-        if (tabs > 1) {
-            child_char = yed_get_var("tree-view-child-char");
-            strcat(out_path, strdup(child_char));
-        }
-
-        strcat(out_path, de->d_name);
-
-        yed_buff_insert_string_no_undo(buff, out_path, row, tabs);
-
-        row += 1;
 cont:;
     }
 
@@ -169,42 +244,54 @@ cont:;
     buff->flags |= BUFF_RD_ONLY;
 }
 
-static void _tree_view_select(void) {
-
-}
-
-static yed_buffer *_get_or_make_buff(void) {
+static void _tree_view_remove_dir(int idx) {
     yed_buffer *buff;
+    file       *f;
+    file       *remove;
+    int         next_idx;
 
-    buff = yed_get_buffer("*tree-view-list");
+    next_idx = idx + 1;
 
-    if (buff == NULL) {
-        buff = yed_create_buffer("*tree-view-list");
-        buff->flags |= BUFF_RD_ONLY | BUFF_SPECIAL;
+    buff = _get_or_make_buff();
+    buff->flags &= ~BUFF_RD_ONLY;
+
+    f = *(file **)array_item(files, idx);
+
+    remove = *(file **)array_item(files, next_idx);
+    while (remove->num_tabs > f->num_tabs) {
+        free(remove);
+        array_delete(files, next_idx);
+        yed_buff_delete_line(buff, next_idx);
+
+        remove = *(file **)array_item(files, next_idx);
     }
 
-    return buff;
+    f->open_children = 0;
+
+    buff->flags |= BUFF_RD_ONLY;
 }
 
-static int _count_tabs(int loc) {
-    char       *str;
-    int         ret = 0;
+static void _tree_view_select(void) {
+    file     *f;
 
-    str  = *(char **) array_item(paths, loc);
+    f = *(file **)array_item(files, ys->active_frame->cursor_line);
 
-    for (int i = 0; i < strlen(str); i++) {
-        if (str[i] == '/') {
-            ret++;
+    if (f->if_dir == IS_DIR) {
+        if (f->open_children) {
+            _tree_view_remove_dir(ys->active_frame->cursor_line);
+        } else {
+            _tree_view_add_dir(ys->active_frame->cursor_line);
         }
+    } else {
+        YEXE("special-buffer-prepare-jump-focus", f->path);
+        YEXE("buffer", f->path);
     }
-
-    return ret-1;
 }
 
 static void _tree_view_line_handler(yed_event *event) {
     yed_frame *frame;
     yed_attrs *ait;
-    char      *s;
+    file      *f;
     yed_attrs *attr_tmp;
     yed_attrs  attr_dir;
     yed_attrs  attr_exec;
@@ -214,6 +301,7 @@ static void _tree_view_line_handler(yed_event *event) {
     yed_attrs  attr_archive;
     yed_attrs  attr_broken_link;
     yed_attrs  attr_file;
+    int        loc;
 
     if (event->frame         == NULL
     ||  event->frame->buffer == NULL
@@ -223,11 +311,11 @@ static void _tree_view_line_handler(yed_event *event) {
 
     frame = event->frame;
 
-    if (array_len(paths) < event->row) { return; }
+    if (array_len(files) < event->row) { return; }
 
-    s = *(char **) array_item(paths, event->row);
+    f = *(file **) array_item(files, event->row);
 
-    if (s == NULL) { return; }
+    if (f->path == NULL) { return; }
 
     attr_dir         = ZERO_ATTR;
     attr_exec        = ZERO_ATTR;
@@ -264,7 +352,7 @@ static void _tree_view_line_handler(yed_event *event) {
     attr_file.fg         = ATTR_16_GREY;
 
     struct stat statbuf;
-    if (lstat(s, &statbuf) != 0) { return; }
+    if (lstat(f->path, &statbuf) != 0) { return; }
 
     switch (statbuf.st_mode & S_IFMT) {
         case S_IFDIR:
@@ -285,14 +373,82 @@ static void _tree_view_line_handler(yed_event *event) {
             }
             break;
     }
+
+    loc = 1;
     array_traverse(event->line_attrs, ait) {
-        yed_combine_attrs(ait, attr_tmp);
+        if (loc > f->color_loc) {
+            yed_combine_attrs(ait, attr_tmp);
+        }
+        loc++;
     }
 }
 
 static void _tree_view_key_pressed_handler(yed_event *event) {
+  yed_frame *eframe;
 
+    eframe = ys->active_frame;
+
+    if (event->key != ENTER
+    ||  ys->interactive_command
+    ||  !eframe
+    ||  !eframe->buffer
+    ||  strcmp(eframe->buffer->name, "*tree-view-list")) {
+        return;
+    }
+
+    _tree_view_select();
+
+    event->cancel = 1;
+}
+
+static yed_buffer *_get_or_make_buff(void) {
+    yed_buffer *buff;
+
+    buff = yed_get_buffer("*tree-view-list");
+
+    if (buff == NULL) {
+        buff = yed_create_buffer("*tree-view-list");
+        buff->flags |= BUFF_RD_ONLY | BUFF_SPECIAL;
+    }
+
+    return buff;
+}
+
+static file *_init_file(int parent_idx, char *path, char *name, int if_dir, int num_tabs, int color_loc) {
+    file *f;
+
+    f = malloc(sizeof(file));
+    memset(f, sizeof(file), '0');
+
+    if (parent_idx == IS_ROOT) {
+        f->parent = NULL;
+    } else {
+        f->parent = *(struct file **) array_item(files, parent_idx);
+    }
+
+    memset(f->path, sizeof(char[512]), '0');
+    strcat(f->path, path);
+
+    memset(f->name, sizeof(char[512]), '0');
+    strcat(f->name, name);
+
+    f->if_dir        = if_dir;
+    f->num_tabs      = num_tabs;
+    f->open_children = 0;
+    f->color_loc     = color_loc;
+
+    return f;
+}
+
+static void _clear_files(void) {
+    file *f;
+    while (array_len(files) > 0) {
+        f = *(file **)array_item(files, 0);
+        free(f);
+        array_delete(files, 0);
+    }
 }
 
 static void _tree_view_unload(yed_plugin *self) {
+    _clear_files();
 }
