@@ -1,10 +1,15 @@
 #include <yed/plugin.h>
+#include <time.h>
 
 #define IS_ROOT   -1
 #define IS_FILE    0
 #define IS_DIR     1
 #define IS_IMAGE   2
 #define IS_ARCHIVE 3
+#define IS_LINK    4
+#define IS_B_LINK  5
+#define IS_DEVICE  6
+#define IS_EXEC    7
 #define MAYBE_CONVERT(rgb) (tc ? (rgb) : rgb_to_256(rgb))
 
 /* global structs */
@@ -24,6 +29,8 @@ static array_t     hidden_items;
 static array_t     image_extensions;
 static array_t     archive_extensions;
 static array_t     files;
+static time_t      last_time;
+static time_t      wait_time;
 
 /* internal functions*/
 static void        _tree_view(int n_args, char **args);
@@ -33,6 +40,7 @@ static void        _tree_view_remove_dir(int idx);
 static void        _tree_view_select(void);
 static void        _tree_view_line_handler(yed_event *event);
 static void        _tree_view_key_pressed_handler(yed_event *event);
+static void        _tree_view_update_handler(yed_event *event);
 static void        _tree_view_unload(yed_plugin *self);
 
 /* internal helper functions */
@@ -47,18 +55,15 @@ static file       *_init_file(int parent_idx, char *path, char *name,
 int yed_plugin_boot(yed_plugin *self) {
     yed_event_handler tree_view_key;
     yed_event_handler tree_view_line;
+    yed_event_handler tree_view_update;
 
     YED_PLUG_VERSION_CHECK();
 
-    tree_view_key.kind = EVENT_KEY_PRESSED;
-    tree_view_key.fn   = _tree_view_key_pressed_handler;
-    yed_plugin_add_event_handler(self, tree_view_key);
-
-    tree_view_line.kind = EVENT_LINE_PRE_DRAW;
-    tree_view_line.fn   = _tree_view_line_handler;
-    yed_plugin_add_event_handler(self, tree_view_line);
-
     Self = self;
+
+    if (yed_get_var("tree-view-update-period") == NULL) {
+        yed_set_var("tree-view-update-period", "5");
+    }
 
     if (yed_get_var("tree-view-hidden-items") == NULL) {
         yed_set_var("tree-view-hidden-items", "");
@@ -88,17 +93,29 @@ int yed_plugin_boot(yed_plugin *self) {
 
     yed_plugin_set_unload_fn(self, _tree_view_unload);
 
+    _tree_view_init();
+
+    wait_time = atoi(yed_get_var("tree-view-update-period"));
+    last_time = time(NULL);
+
+    tree_view_key.kind = EVENT_KEY_PRESSED;
+    tree_view_key.fn   = _tree_view_key_pressed_handler;
+    yed_plugin_add_event_handler(self, tree_view_key);
+
+    tree_view_line.kind = EVENT_LINE_PRE_DRAW;
+    tree_view_line.fn   = _tree_view_line_handler;
+    yed_plugin_add_event_handler(self, tree_view_line);
+
+    tree_view_update.kind = EVENT_PRE_PUMP;
+    tree_view_update.fn   = _tree_view_update_handler;
+    yed_plugin_add_event_handler(self, tree_view_update);
+
+
     return 0;
 }
 
 static void _tree_view(int n_args, char **args) {
     if (array_len(files) == 0) {
-        files = array_make(file *);
-
-        _add_hidden_items();
-        _add_archive_extensions();
-        _add_image_extensions();
-
         _tree_view_init();
     }
 
@@ -115,6 +132,16 @@ static void _tree_view_init(void) {
     file       *dot;
     yed_buffer *buff;
     char       *tmp;
+
+    if (array_len(files) == 0) {
+        files = array_make(file *);
+
+        _add_hidden_items();
+        _add_archive_extensions();
+        _add_image_extensions();
+    } else {
+        _clear_files();
+    }
 
     buff = _get_or_make_buff();
     buff->flags &= ~BUFF_RD_ONLY;
@@ -135,6 +162,7 @@ static void _tree_view_add_dir(int idx) {
     yed_buffer     *buff;
     struct dirent  *de;
     DIR            *dr;
+    FILE           *fs;
     int             new_idx;
     int             dir;
     int             tabs;
@@ -218,28 +246,46 @@ skip:;
 
         dir = 0;
         if (lstat(path, &statbuf) == 0) {
-            if (S_ISDIR(statbuf.st_mode)) {
-                dir = 1;
-            }
-        }
-
-        if (dir == 0) {
-            array_traverse(archive_extensions, str_it) {
-                if (strstr(de->d_name, (*str_it))) {
-                    dir = IS_ARCHIVE;
+            switch (statbuf.st_mode & S_IFMT) {
+                case S_IFDIR:
+                    dir = IS_DIR;
                     break;
-                }
-            }
-        }
-
-        if (dir == 0) {
-            array_traverse(image_extensions, str_it) {
-                if (strstr(de->d_name, (*str_it))) {
-                    dir = IS_IMAGE;
+                case S_IFLNK:
+                    fs = fopen(path, "r");
+                    if (!fs && errno == 2) {
+                        dir = IS_B_LINK;
+                    } else {
+                        dir = IS_LINK;
+                    }
                     break;
-                }
+                case S_IFBLK:
+                case S_IFCHR:
+                    dir = IS_DEVICE;
+                    break;
+                default:
+                    if (statbuf.st_mode & S_IXUSR) {
+                        dir = IS_EXEC;
+                    } else {
+                        array_traverse(archive_extensions, str_it) {
+                            if (strstr(de->d_name, (*str_it))) {
+                                dir = IS_ARCHIVE;
+                                goto break_switch;
+                            }
+                        }
+
+                        array_traverse(image_extensions, str_it) {
+                            if (strstr(de->d_name, (*str_it))) {
+                                dir = IS_IMAGE;
+                                goto break_switch;
+                            }
+                        }
+
+                        dir = IS_FILE;
+                    }
+                    break;
             }
         }
+break_switch:;
 
         new_f = _init_file(idx, path, name, dir, tabs, color_loc);
 
@@ -322,7 +368,6 @@ static void _tree_view_line_handler(yed_event *event) {
     int         loc;
     int         tc;
     int         len;
-    FILE *fs;
 
     if (event->frame         == NULL
     ||  event->frame->buffer == NULL
@@ -447,36 +492,31 @@ static void _tree_view_line_handler(yed_event *event) {
         attr_broken_link.bg    = MAYBE_CONVERT(RGB_32_hex(100000));
     }
 
-    if (lstat(f->path, &statbuf) != 0) { return; }
-
-    switch (statbuf.st_mode & S_IFMT) {
-        case S_IFDIR:
+    switch (f->flags) {
+        case IS_DIR:
             attr_tmp = &attr_dir;
             break;
-        case S_IFLNK:
-            fs = fopen(f->path, "r");
-            if (!fs && errno == 2) {
-                attr_tmp = &attr_broken_link;
-            } else {
-                attr_tmp = &attr_symb_link;
-            }
+        case IS_LINK:
+            attr_tmp = &attr_symb_link;
             break;
-        case S_IFBLK:
-        case S_IFCHR:
+        case IS_B_LINK:
+            attr_tmp = &attr_broken_link;
+            break;
+        case IS_DEVICE:
             attr_tmp = &attr_device;
             break;
+        case IS_ARCHIVE:
+            attr_tmp = &attr_archive;
+            break;
+        case IS_IMAGE:
+            attr_tmp = &attr_graphic_img;
+            break;
+        case IS_EXEC:
+            attr_tmp = &attr_exec;
+            break;
+        case IS_FILE:
         default:
-            if (statbuf.st_mode & S_IXUSR) {
-                attr_tmp = &attr_exec;
-            } else {
-                if (f->flags == IS_ARCHIVE) {
-                    attr_tmp = &attr_archive;
-                } else if (f->flags == IS_IMAGE) {
-                    attr_tmp = &attr_graphic_img;
-                } else {
-                    attr_tmp = &attr_file;
-                }
-            }
+            attr_tmp = &attr_file;
             break;
     }
 
@@ -507,6 +547,55 @@ static void _tree_view_key_pressed_handler(yed_event *event) {
     _tree_view_select();
 
     event->cancel = 1;
+}
+
+static void  _tree_view_update_handler(yed_event *event) {
+    file    **f;
+    char     *path;
+    array_t   open_dirs;
+    time_t    curr_time;
+    int       idx;
+
+    curr_time = time(NULL);
+
+    if (curr_time > last_time + wait_time) {
+        yed_log("update\n");
+
+        open_dirs = array_make(char *);
+
+        idx = 0;
+        array_traverse(files, f) {
+            if (idx == 0) { idx++; continue; }
+
+            if ((*f)->open_children) {
+                path = strdup((*f)->path);
+                array_push(open_dirs, path);
+            }
+
+            idx++;
+        }
+
+        _tree_view_init();
+
+        while (array_len(open_dirs) > 0) {
+            path = *(char **)array_item(open_dirs, 0);
+
+            idx = 0;
+            array_traverse(files, f) {
+                if (idx == 0) { idx++; continue; }
+
+                if (strcmp((*f)->path, path) == 0) {
+                    _tree_view_add_dir(idx);
+                    array_delete(open_dirs, 0);
+                    break;
+                }
+
+                idx++;
+            }
+        }
+
+        last_time = curr_time;
+    }
 }
 
 static yed_buffer *_get_or_make_buff(void) {
