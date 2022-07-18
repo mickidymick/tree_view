@@ -559,7 +559,6 @@ static void  _tree_view_update_handler(yed_event *event) {
     curr_time = time(NULL);
 
     if (curr_time > last_time + wait_time) {
-        yed_log("update\n");
 
         open_dirs = array_make(char *);
 
