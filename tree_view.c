@@ -322,6 +322,7 @@ static void _tree_view_line_handler(yed_event *event) {
     int         loc;
     int         tc;
     int         len;
+    FILE *fs;
 
     if (event->frame         == NULL
     ||  event->frame->buffer == NULL
@@ -387,10 +388,10 @@ static void _tree_view_line_handler(yed_event *event) {
         attr_device.bg    = ATTR_16_BLACK;
     } else if (attr_device.flags & ATTR_256) {
         attr_device.fg    = MAYBE_CONVERT(RGB_32_hex(FFFF33));
-        attr_device.bg    = MAYBE_CONVERT(RGB_32_hex(000000));
+        attr_device.bg    = MAYBE_CONVERT(RGB_32_hex(100000));
     } else if (attr_device.flags & ATTR_RGB) {
         attr_device.fg    = MAYBE_CONVERT(RGB_32_hex(FFFF33));
-        attr_device.bg    = MAYBE_CONVERT(RGB_32_hex(000000));
+        attr_device.bg    = MAYBE_CONVERT(RGB_32_hex(100000));
     }
 
     attr_file = yed_active_style_get_code_string();
@@ -433,7 +434,18 @@ static void _tree_view_line_handler(yed_event *event) {
         attr_archive.fg    = MAYBE_CONVERT(RGB_32_hex(FF3333));
     }
 
-    attr_broken_link = ZERO_ATTR;
+    attr_broken_link = yed_active_style_get_code_string();
+    if (attr_broken_link.flags & ATTR_16) {
+        attr_broken_link.flags = ATTR_16_LIGHT_FG;
+        attr_broken_link.fg    = ATTR_16_RED;
+        attr_broken_link.bg    = ATTR_16_BLACK;
+    } else if (attr_broken_link.flags & ATTR_256) {
+        attr_broken_link.fg    = MAYBE_CONVERT(RGB_32_hex(FF3333));
+        attr_broken_link.bg    = MAYBE_CONVERT(RGB_32_hex(100000));
+    } else if (attr_broken_link.flags & ATTR_RGB) {
+        attr_broken_link.fg    = MAYBE_CONVERT(RGB_32_hex(FF3333));
+        attr_broken_link.bg    = MAYBE_CONVERT(RGB_32_hex(100000));
+    }
 
     if (lstat(f->path, &statbuf) != 0) { return; }
 
@@ -442,12 +454,12 @@ static void _tree_view_line_handler(yed_event *event) {
             attr_tmp = &attr_dir;
             break;
         case S_IFLNK:
-            len = readlink(f->path, buf, sizeof(buf)-1);
-            if (len != -1) {
-                buf[len] = '\0';
+            fs = fopen(f->path, "r");
+            if (!fs && errno == 2) {
+                attr_tmp = &attr_broken_link;
+            } else {
+                attr_tmp = &attr_symb_link;
             }
-            yed_log("%s -> %s\n", f->path, buf);
-            attr_tmp = &attr_symb_link;
             break;
         case S_IFBLK:
         case S_IFCHR:
