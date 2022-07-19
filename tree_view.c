@@ -663,8 +663,11 @@ static void _clear_files(void) {
 static int _cmpfunc(const void *a, const void *b) {
     file *left_f;
     file *right_f;
+    char  left_name[512];
+    char  right_name[512];
     int   left;
     int   right;
+    int   loc;
 
     left_f  = *(file **)a;
     right_f = *(file **)b;
@@ -684,7 +687,22 @@ static int _cmpfunc(const void *a, const void *b) {
     } else if (left > right) {
         return -1;
     } else {
-        return strcmp(left_f->name, right_f->name);
+        strcpy(left_name, left_f->name);
+        strcpy(right_name, right_f->name);
+
+        loc = 0;
+        while (left_name[loc]) {
+            left_name[loc] = tolower(left_name[loc]);
+            loc++;
+        }
+
+        loc = 0;
+        while (right_name[loc]) {
+            right_name[loc] = tolower(right_name[loc]);
+            loc++;
+        }
+
+    	return strcmp(left_name, right_name);
     }
 
     return ((file *)a)->flags - ((file *)b)->flags;
