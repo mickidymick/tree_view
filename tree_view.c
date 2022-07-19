@@ -49,6 +49,7 @@ static void        _add_hidden_items(void);
 static void        _add_archive_extensions(void);
 static void        _add_image_extensions(void);
 static void        _clear_files(void);
+static int         _cmpfunc(const void *a, const void *b);
 static file       *_init_file(int parent_idx, char *path, char *name,
                               int if_dir, int num_tabs, int color_loc);
 
@@ -156,6 +157,7 @@ static void _tree_view_init(void) {
 
 static void _tree_view_add_dir(int idx) {
     char          **str_it;
+    file          **f_it;
     file           *f;
     file           *new_f;
     file           *prev_f;
@@ -175,6 +177,10 @@ static void _tree_view_add_dir(int idx) {
     char            write_name[512];
     char            new_name[512];
     struct stat     statbuf;
+    array_t         tmp_files;
+    int             loc;
+
+    tmp_files = array_make(file *);
 
     buff = _get_or_make_buff();
     f    = *(file **)array_item(files, idx);
@@ -208,41 +214,7 @@ static void _tree_view_add_dir(int idx) {
 
         tabs = f->num_tabs+1;
         memset(name, sizeof(char[512]), '0');
-        memset(write_name, sizeof(char[512]), '0');
-        color_loc = tabs * yed_get_tab_width();
-        if (tabs > 0) {
-            color_loc += 1;
-            for  (i = 0; i < tabs; i++) {
-                strcat(write_name, yed_get_var("tree-view-child-char-i"));
-                for (j = 0; j < yed_get_tab_width()-1; j++) {
-                    strcat(write_name, " ");
-                }
-            }
-            strcat(write_name, yed_get_var("tree-view-child-char-l"));
-        }
-        strcat(write_name, de->d_name);
         strcat(name, de->d_name);
-
-        if (!first && tabs > 0) {
-            prev_f = *(file **)array_item(files, new_idx-1);
-
-            memset(new_name, sizeof(char[512]), '0');
-            if (tabs > 0) {
-                for  (i = 0; i < tabs; i++) {
-                    strcat(new_name, yed_get_var("tree-view-child-char-i"));
-                    for (j = 0; j < yed_get_tab_width()-1; j++) {
-                        strcat(new_name, " ");
-                    }
-                }
-                strcat(new_name, yed_get_var("tree-view-child-char-t"));
-            }
-            strcat(new_name, prev_f->name);
-            yed_line_clear(buff, new_idx-1);
-            yed_buff_insert_string_no_undo(buff, new_name, new_idx-1, 1);
-        }
-skip:;
-
-        yed_buff_insert_string_no_undo(buff, write_name, new_idx, 1);
 
         dir = 0;
         if (lstat(path, &statbuf) == 0) {
@@ -286,14 +258,11 @@ skip:;
             }
         }
 break_switch:;
-
+        color_loc = 0;
         new_f = _init_file(idx, path, name, dir, tabs, color_loc);
 
-        if (new_idx >= array_len(files)) {
-            array_push(files, new_f);
-        } else {
-            array_insert(files, new_idx, new_f);
-        }
+        array_push(tmp_files, new_f);
+
         new_idx++;
         first = 0;
 
@@ -301,6 +270,52 @@ cont:;
     }
 
     closedir(dr);
+
+/*     if ((*(files **)array_item(files, idx))->tabs == (*(files **)array_item(files, idx+1))->tabs) { */
+
+/*     } */
+
+    qsort(array_data(tmp_files), array_len(tmp_files), sizeof(file *), _cmpfunc);
+
+    new_idx = idx+1;
+    loc = 0;
+    array_traverse(tmp_files, f_it) {
+        color_loc = (*f_it)->num_tabs * yed_get_tab_width();
+        memset(write_name, sizeof(char[512]), '0');
+
+        if ((*f_it)->num_tabs > 0) {
+            color_loc += 1;
+
+            for  (i = 0; i < (*f_it)->num_tabs; i++) {
+                strcat(write_name, yed_get_var("tree-view-child-char-i"));
+                for (j = 0; j < yed_get_tab_width()-1; j++) {
+                    strcat(write_name, " ");
+                }
+            }
+
+            if (loc == array_len(tmp_files)-1) {
+                strcat(write_name, yed_get_var("tree-view-child-char-l"));
+            } else {
+                strcat(write_name, yed_get_var("tree-view-child-char-t"));
+            }
+
+            strcat(write_name, (*f_it)->name);
+            yed_buff_insert_string_no_undo(buff, write_name, new_idx, 1);
+        } else {
+            yed_buff_insert_string_no_undo(buff, (*f_it)->name, new_idx, 1);
+        }
+
+        (*f_it)->color_loc = color_loc;
+
+        if (new_idx >= array_len(files)) {
+            array_push(files, (*f_it));
+        } else {
+            array_insert(files, new_idx, (*f_it));
+        }
+
+        new_idx++;
+        loc++;
+    }
 
     buff->flags |= BUFF_RD_ONLY;
 }
@@ -643,6 +658,36 @@ static void _clear_files(void) {
         free(f);
         array_delete(files, 0);
     }
+}
+
+static int _cmpfunc(const void *a, const void *b) {
+    file *left_f;
+    file *right_f;
+    int   left;
+    int   right;
+
+    left_f  = *(file **)a;
+    right_f = *(file **)b;
+
+    left = 0;
+    if (left_f->flags == IS_DIR) {
+        left = 1;
+    }
+
+    right = 0;
+    if (right_f->flags == IS_DIR) {
+        right = 1;
+    }
+
+    if (left < right) {
+        return  1;
+    } else if (left > right) {
+        return -1;
+    } else {
+        return strcmp(left_f->name, right_f->name);
+    }
+
+    return ((file *)a)->flags - ((file *)b)->flags;
 }
 
 static void _add_hidden_items(void) {
