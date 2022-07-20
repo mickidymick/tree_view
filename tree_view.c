@@ -90,6 +90,34 @@ int yed_plugin_boot(yed_plugin *self) {
         yed_set_var("tree-view-child-char-t", "├");
     }
 
+    if (yed_get_var("tree-view-directory-color") == NULL) {
+        yed_set_var("tree-view-directory-color", "&blue");
+    }
+
+    if (yed_get_var("tree-view-exec-color") == NULL) {
+        yed_set_var("tree-view-exec-color", "&green");
+    }
+
+    if (yed_get_var("tree-view-symbolic-link-color") == NULL) {
+        yed_set_var("tree-view-symbolic-link-color", "&cyan");
+    }
+
+    if (yed_get_var("tree-view-device-color") == NULL) {
+        yed_set_var("tree-view-device-color", "&black swap &yellow.fg");
+    }
+
+    if (yed_get_var("tree-view-graphic-image-color") == NULL) {
+        yed_set_var("tree-view-graphic-image-color", "&magenta");
+    }
+
+    if (yed_get_var("tree-view-archive-color") == NULL) {
+        yed_set_var("tree-view-archive-color", "&red");
+    }
+
+    if (yed_get_var("tree-view-broken-link-color") == NULL) {
+        yed_set_var("tree-view-broken-link-color", "&black swap &red.fg");
+    }
+
     yed_plugin_set_command(self, "tree-view", _tree_view);
 
     yed_plugin_set_unload_fn(self, _tree_view_unload);
@@ -369,6 +397,7 @@ static void _tree_view_line_handler(yed_event *event) {
     yed_attrs  *ait;
     file       *f;
     yed_attrs  *attr_tmp;
+    char       *color_var;
     yed_attrs   attr_dir;
     yed_attrs   attr_exec;
     yed_attrs   attr_symb_link;
@@ -411,25 +440,33 @@ static void _tree_view_line_handler(yed_event *event) {
 
     tc = !!yed_get_var("truecolor");
 
-    attr_dir         = yed_active_style_get_blue();
+    if ((color_var = yed_get_var("tree-view-directory-color"))) {
+        attr_dir         = yed_parse_attrs(color_var);
+    }
 
-    attr_exec        = yed_active_style_get_green();
+    if ((color_var = yed_get_var("tree-view-exec-color"))) {
+        attr_exec         = yed_parse_attrs(color_var);
+    }
 
-    attr_symb_link   = yed_active_style_get_cyan();
+    if ((color_var = yed_get_var("tree-view-symbolic-link-color"))) {
+        attr_symb_link         = yed_parse_attrs(color_var);
+    }
 
-    attr_device      = yed_active_style_get_yellow();
-    attr_device.bg   = yed_active_style_get_black().fg;
+    if ((color_var = yed_get_var("tree-view-device-color"))) {
+        attr_device         = yed_parse_attrs(color_var);
+    }
 
-/*     attr_file        = yed_active_style_get_active(); */
+    if ((color_var = yed_get_var("tree-view-graphic-image-color"))) {
+        attr_graphic_img         = yed_parse_attrs(color_var);
+    }
 
-/*     attr_lines       = yed_active_style_get_active(); */
+    if ((color_var = yed_get_var("tree-view-archive-color"))) {
+        attr_archive         = yed_parse_attrs(color_var);
+    }
 
-    attr_graphic_img = yed_active_style_get_magenta();
-
-    attr_archive     = yed_active_style_get_red();
-
-    attr_broken_link = yed_active_style_get_red();
-    attr_device.bg   = yed_active_style_get_black().fg;
+    if ((color_var = yed_get_var("tree-view-broken-link-color"))) {
+        attr_broken_link         = yed_parse_attrs(color_var);
+    }
 
     base = 0;
     switch (f->flags) {
