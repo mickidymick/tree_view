@@ -383,6 +383,7 @@ static void _tree_view_line_handler(yed_event *event) {
     int         loc;
     int         tc;
     int         len;
+    int         base;
 
     if (event->frame         == NULL
     ||  event->frame->buffer == NULL
@@ -410,103 +411,27 @@ static void _tree_view_line_handler(yed_event *event) {
 
     tc = !!yed_get_var("truecolor");
 
-    attr_dir = yed_active_style_get_code_string();
-    if (attr_dir.flags & ATTR_16) {
-        attr_dir.flags = ATTR_16_LIGHT_FG;
-        attr_dir.fg    = ATTR_16_BLUE;
-    } else if (attr_dir.flags & ATTR_256) {
-        attr_dir.fg    = MAYBE_CONVERT(RGB_32_hex(0080FF));
-    } else if (attr_dir.flags & ATTR_RGB) {
-        attr_dir.fg    = MAYBE_CONVERT(RGB_32_hex(0080FF));
-    }
+    attr_dir         = yed_active_style_get_blue();
 
+    attr_exec        = yed_active_style_get_green();
 
-    attr_exec = yed_active_style_get_code_string();
-    if (attr_exec.flags & ATTR_16) {
-        attr_exec.flags = ATTR_16_LIGHT_FG;
-        attr_exec.fg    = ATTR_16_GREEN;
-    } else if (attr_exec.flags & ATTR_256) {
-        attr_exec.fg    = MAYBE_CONVERT(RGB_32_hex(00CC00));
-    } else if (attr_exec.flags & ATTR_RGB) {
-        attr_exec.fg    = MAYBE_CONVERT(RGB_32_hex(00CC00));
-    }
+    attr_symb_link   = yed_active_style_get_cyan();
 
-    attr_symb_link = yed_active_style_get_code_string();
-    if (attr_symb_link.flags & ATTR_16) {
-        attr_symb_link.flags = ATTR_16_LIGHT_FG;
-        attr_symb_link.fg    = ATTR_16_GREEN;
-    } else if (attr_symb_link.flags & ATTR_256) {
-        attr_symb_link.fg    = MAYBE_CONVERT(RGB_32_hex(66FFFF));
-    } else if (attr_symb_link.flags & ATTR_RGB) {
-        attr_symb_link.fg    = MAYBE_CONVERT(RGB_32_hex(66FFFF));
-    }
+    attr_device      = yed_active_style_get_yellow();
+    attr_device.bg   = yed_active_style_get_black().fg;
 
-    attr_device = yed_active_style_get_code_string();
-    if (attr_device.flags & ATTR_16) {
-        attr_device.flags = ATTR_16_LIGHT_FG;
-        attr_device.fg    = ATTR_16_YELLOW;
-        attr_device.bg    = ATTR_16_BLACK;
-    } else if (attr_device.flags & ATTR_256) {
-        attr_device.fg    = MAYBE_CONVERT(RGB_32_hex(FFFF33));
-        attr_device.bg    = MAYBE_CONVERT(RGB_32_hex(100000));
-    } else if (attr_device.flags & ATTR_RGB) {
-        attr_device.fg    = MAYBE_CONVERT(RGB_32_hex(FFFF33));
-        attr_device.bg    = MAYBE_CONVERT(RGB_32_hex(100000));
-    }
+/*     attr_file        = yed_active_style_get_active(); */
 
-    attr_file = yed_active_style_get_code_string();
-    if (attr_file.flags & ATTR_16) {
-        attr_file.flags = ATTR_16_LIGHT_FG;
-        attr_file.fg    = ATTR_16_GREY;
-    } else if (attr_file.flags & ATTR_256) {
-        attr_file.fg    = MAYBE_CONVERT(RGB_32_hex(FFFFFF));
-    } else if (attr_file.flags & ATTR_RGB) {
-        attr_file.fg    = MAYBE_CONVERT(RGB_32_hex(FFFFFF));
-    }
+/*     attr_lines       = yed_active_style_get_active(); */
 
-    attr_lines = yed_active_style_get_code_string();
-    if (attr_lines.flags & ATTR_16) {
-        attr_lines.flags = ATTR_16_LIGHT_FG;
-        attr_lines.fg    = ATTR_16_GREY;
-    } else if (attr_lines.flags & ATTR_256) {
-        attr_lines.fg    = MAYBE_CONVERT(RGB_32_hex(FFFFFF));
-    } else if (attr_lines.flags & ATTR_RGB) {
-        attr_lines.fg    = MAYBE_CONVERT(RGB_32_hex(FFFFFF));
-    }
+    attr_graphic_img = yed_active_style_get_magenta();
 
-    attr_graphic_img = yed_active_style_get_code_string();
-    if (attr_graphic_img.flags & ATTR_16) {
-        attr_graphic_img.flags = ATTR_16_LIGHT_FG;
-        attr_graphic_img.fg    = ATTR_16_MAGENTA;
-    } else if (attr_graphic_img.flags & ATTR_256) {
-        attr_graphic_img.fg    = MAYBE_CONVERT(RGB_32_hex(FF33FF));
-    } else if (attr_graphic_img.flags & ATTR_RGB) {
-        attr_graphic_img.fg    = MAYBE_CONVERT(RGB_32_hex(FF33FF));
-    }
+    attr_archive     = yed_active_style_get_red();
 
-    attr_archive = yed_active_style_get_code_string();
-    if (attr_archive.flags & ATTR_16) {
-        attr_archive.flags = ATTR_16_LIGHT_FG;
-        attr_archive.fg    = ATTR_16_RED;
-    } else if (attr_archive.flags & ATTR_256) {
-        attr_archive.fg    = MAYBE_CONVERT(RGB_32_hex(FF3333));
-    } else if (attr_archive.flags & ATTR_RGB) {
-        attr_archive.fg    = MAYBE_CONVERT(RGB_32_hex(FF3333));
-    }
+    attr_broken_link = yed_active_style_get_red();
+    attr_device.bg   = yed_active_style_get_black().fg;
 
-    attr_broken_link = yed_active_style_get_code_string();
-    if (attr_broken_link.flags & ATTR_16) {
-        attr_broken_link.flags = ATTR_16_LIGHT_FG;
-        attr_broken_link.fg    = ATTR_16_RED;
-        attr_broken_link.bg    = ATTR_16_BLACK;
-    } else if (attr_broken_link.flags & ATTR_256) {
-        attr_broken_link.fg    = MAYBE_CONVERT(RGB_32_hex(FF3333));
-        attr_broken_link.bg    = MAYBE_CONVERT(RGB_32_hex(100000));
-    } else if (attr_broken_link.flags & ATTR_RGB) {
-        attr_broken_link.fg    = MAYBE_CONVERT(RGB_32_hex(FF3333));
-        attr_broken_link.bg    = MAYBE_CONVERT(RGB_32_hex(100000));
-    }
-
+    base = 0;
     switch (f->flags) {
         case IS_DIR:
             attr_tmp = &attr_dir;
@@ -531,6 +456,7 @@ static void _tree_view_line_handler(yed_event *event) {
             break;
         case IS_FILE:
         default:
+            base = 1;
             attr_tmp = &attr_file;
             break;
     }
@@ -538,9 +464,11 @@ static void _tree_view_line_handler(yed_event *event) {
     loc = 1;
     array_traverse(event->line_attrs, ait) {
         if (loc > f->color_loc) {
-            yed_combine_attrs(ait, attr_tmp);
+            if (!base) {
+                yed_combine_attrs(ait, attr_tmp);
+            }
         } else {
-            yed_combine_attrs(ait, &attr_lines);
+/*             yed_combine_attrs(ait, &attr_lines); */
         }
         loc++;
     }
