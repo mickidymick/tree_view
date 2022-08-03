@@ -362,7 +362,7 @@ static void _tree_view_remove_dir(int idx) {
     f = *(file **)array_item(files, idx);
 
     remove = *(file **)array_item(files, next_idx);
-    while (remove->num_tabs > f->num_tabs) {
+    while (remove && remove->num_tabs > f->num_tabs) {
         free(remove);
         array_delete(files, next_idx);
         yed_buff_delete_line(buff, next_idx);
