@@ -416,6 +416,7 @@ static void _tree_view_line_handler(yed_event *event) {
     int         tc;
     int         len;
     int         base;
+    yed_line   *line;
 
     if (event->frame         == NULL
     ||  event->frame->buffer == NULL
@@ -501,16 +502,17 @@ static void _tree_view_line_handler(yed_event *event) {
             break;
     }
 
-    loc = 1;
-    array_traverse(event->line_attrs, ait) {
+    if (event->frame->buffer == NULL) { return; }
+
+    line = yed_buff_get_line(event->frame->buffer, event->row);
+    if (line == NULL) { return; }
+
+    for (loc = 1; loc <= line->visual_width; loc += 1) {
         if (loc > f->color_loc) {
             if (!base) {
-                yed_combine_attrs(ait, attr_tmp);
+                yed_eline_combine_col_attrs(event, loc, attr_tmp);
             }
-        } else {
-/*             yed_combine_attrs(ait, &attr_lines); */
         }
-        loc++;
     }
 }
 
