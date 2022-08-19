@@ -343,6 +343,7 @@ cont:;
     }
 
     buff->flags |= BUFF_RD_ONLY;
+    array_free(tmp_files);
 }
 
 static void _tree_view_remove_dir(int idx) {
