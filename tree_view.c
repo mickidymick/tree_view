@@ -605,10 +605,10 @@ static file *_init_file(int parent_idx, char *path, char *name, int if_dir, int 
         f->parent = *(struct file **) array_item(files, parent_idx);
     }
 
-    memset(f->path, sizeof(char[512]), '0');
+    memset(f->path, 0, sizeof(char[512]));
     strcat(f->path, path);
 
-    memset(f->name, sizeof(char[512]), '0');
+    memset(f->name, 0, sizeof(char[512]));
     strcat(f->name, name);
 
     f->flags         = if_dir;
@@ -620,12 +620,12 @@ static file *_init_file(int parent_idx, char *path, char *name, int if_dir, int 
 }
 
 static void _clear_files(void) {
-    file *f;
-    while (array_len(files) > 0) {
-        f = *(file **)array_item(files, 0);
-        free(f);
-        array_delete(files, 0);
+    file **file_it;
+    array_traverse(files, file_it) {
+        free(*file_it);
     }
+
+    array_free(files);
 }
 
 static int _cmpfunc(const void *a, const void *b) {
@@ -680,8 +680,12 @@ static void _add_hidden_items(void) {
     char       *token;
     char       *tmp;
     const char  s[2] = " ";
+    char      **c_it;
 
     if (array_len(hidden_items) > 0) {
+        array_traverse(hidden_items, c_it) {
+            free(c_it);
+        }
         array_clear(hidden_items);
     }
     hidden_items = array_make(char *);
@@ -698,8 +702,12 @@ static void _add_archive_extensions(void) {
     char       *tmp;
     char       *str;
     const char  s[2] = " ";
+    char      **c_it;
 
     if (array_len(archive_extensions) > 0) {
+        array_traverse(archive_extensions, c_it) {
+            free(c_it);
+        }
         array_clear(archive_extensions);
     }
     archive_extensions = array_make(char *);
@@ -830,8 +838,12 @@ static void _add_image_extensions(void) {
     char       *tmp;
     char       *str;
     const char  s[2] = " ";
+    char      **c_it;
 
     if (array_len(image_extensions) > 0) {
+        array_traverse(image_extensions, c_it) {
+            free(c_it);
+        }
         array_clear(image_extensions);
     }
     image_extensions = array_make(char *);
@@ -881,5 +893,28 @@ static void _add_image_extensions(void) {
 }
 
 static void _tree_view_unload(yed_plugin *self) {
+    char **c_it;
+
     _clear_files();
+
+    if (array_len(hidden_items) > 0) {
+        array_traverse(hidden_items, c_it) {
+            free(c_it);
+        }
+        array_clear(hidden_items);
+    }
+
+    if (array_len(archive_extensions) > 0) {
+        array_traverse(archive_extensions, c_it) {
+            free(c_it);
+        }
+        array_clear(archive_extensions);
+    }
+
+    if (array_len(image_extensions) > 0) {
+        array_traverse(image_extensions, c_it) {
+            free(c_it);
+        }
+        array_clear(image_extensions);
+    }
 }
