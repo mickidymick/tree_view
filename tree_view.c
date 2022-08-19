@@ -158,6 +158,7 @@ static void _tree_view(int n_args, char **args) {
 }
 
 static void _tree_view_init(void) {
+    yed_log("init\n");
     file       *dot;
     yed_buffer *buff;
     char       *tmp;
@@ -298,10 +299,6 @@ cont:;
     }
 
     closedir(dr);
-
-/*     if ((*(files **)array_item(files, idx))->tabs == (*(files **)array_item(files, idx+1))->tabs) { */
-
-/*     } */
 
     qsort(array_data(tmp_files), array_len(tmp_files), sizeof(file *), _cmpfunc);
 
@@ -622,12 +619,14 @@ static file *_init_file(int parent_idx, char *path, char *name, int if_dir, int 
 }
 
 static void _clear_files(void) {
+    yed_log("here\n");
     file **file_it;
+
     array_traverse(files, file_it) {
         free(*file_it);
     }
 
-    array_free(files);
+    array_clear(files);
 }
 
 static int _cmpfunc(const void *a, const void *b) {
@@ -896,27 +895,33 @@ static void _add_image_extensions(void) {
 
 static void _tree_view_unload(yed_plugin *self) {
     char **c_it;
+    file **file_it;
 
-    _clear_files();
+    if (array_len(files) > 0) {
+        array_traverse(files, file_it) {
+            free(*file_it);
+        }
+    }
+    array_free(files);
 
     if (array_len(hidden_items) > 0) {
         array_traverse(hidden_items, c_it) {
-            free(c_it);
+            free(*c_it);
         }
-        array_clear(hidden_items);
     }
+    array_free(hidden_items);
 
     if (array_len(archive_extensions) > 0) {
         array_traverse(archive_extensions, c_it) {
-            free(c_it);
+            free(*c_it);
         }
-        array_clear(archive_extensions);
     }
+    array_free(archive_extensions);
 
     if (array_len(image_extensions) > 0) {
         array_traverse(image_extensions, c_it) {
-            free(c_it);
+            free(*c_it);
         }
-        array_clear(image_extensions);
     }
+    array_free(image_extensions);
 }
