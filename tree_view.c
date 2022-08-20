@@ -158,7 +158,6 @@ static void _tree_view(int n_args, char **args) {
 }
 
 static void _tree_view_init(void) {
-    yed_log("init\n");
     file       *dot;
     yed_buffer *buff;
     char       *tmp;
@@ -620,7 +619,6 @@ static file *_init_file(int parent_idx, char *path, char *name, int if_dir, int 
 }
 
 static void _clear_files(void) {
-    yed_log("here\n");
     file **file_it;
 
     array_traverse(files, file_it) {
