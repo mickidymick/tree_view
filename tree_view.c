@@ -160,7 +160,6 @@ static void _tree_view(int n_args, char **args) {
 static void _tree_view_init(void) {
     file       *dot;
     yed_buffer *buff;
-    char       *tmp;
 
     if (array_len(files) == 0) {
         files = array_make(file *);
@@ -188,7 +187,6 @@ static void _tree_view_add_dir(int idx) {
     file          **f_it;
     file           *f;
     file           *new_f;
-    file           *prev_f;
     yed_buffer     *buff;
     struct dirent  *de;
     DIR            *dr;
@@ -196,14 +194,12 @@ static void _tree_view_add_dir(int idx) {
     int             new_idx;
     int             dir;
     int             tabs;
-    int             first;
     int             i;
     int             j;
     int             color_loc;
-    char            path[512];
+    char            path[1024];
     char            name[512];
     char            write_name[512];
-    char            new_name[512];
     struct stat     statbuf;
     array_t         tmp_files;
     int             loc;
@@ -219,7 +215,6 @@ static void _tree_view_add_dir(int idx) {
     buff->flags &= ~BUFF_RD_ONLY;
 
     new_idx = idx+1;
-    first   = 1;
     while ((de = readdir(dr)) != NULL) {
         if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) {
             continue;
@@ -237,11 +232,11 @@ static void _tree_view_add_dir(int idx) {
 
         f->open_children = 1;
 
-        memset(path, sizeof(char[512]), '0');
+        memset(path, 0, sizeof(char[512]));
         sprintf(path, "%s/%s", f->path, de->d_name);
 
         tabs = f->num_tabs+1;
-        memset(name, sizeof(char[512]), '0');
+        memset(name, 0, sizeof(char[512]));
         strcat(name, de->d_name);
 
         dir = 0;
@@ -292,7 +287,6 @@ break_switch:;
         array_push(tmp_files, new_f);
 
         new_idx++;
-        first = 0;
 
 cont:;
     }
@@ -305,7 +299,7 @@ cont:;
     loc = 0;
     array_traverse(tmp_files, f_it) {
         color_loc = (*f_it)->num_tabs * yed_get_tab_width();
-        memset(write_name, sizeof(char[512]), '0');
+        memset(write_name, 0, sizeof(char[512]));
 
         if ((*f_it)->num_tabs > 0) {
             color_loc += 1;
@@ -393,8 +387,6 @@ static void _tree_view_select(void) {
 }
 
 static void _tree_view_line_handler(yed_event *event) {
-    yed_frame  *frame;
-    yed_attrs  *ait;
     file       *f;
     yed_attrs  *attr_tmp;
     char       *color_var;
@@ -406,12 +398,7 @@ static void _tree_view_line_handler(yed_event *event) {
     yed_attrs   attr_archive;
     yed_attrs   attr_broken_link;
     yed_attrs   attr_file;
-    yed_attrs   attr_lines;
-    struct stat statbuf;
-    char        buf[1024];
     int         loc;
-    int         tc;
-    int         len;
     int         base;
     yed_line   *line;
 
@@ -420,8 +407,6 @@ static void _tree_view_line_handler(yed_event *event) {
     ||  event->frame->buffer != _get_or_make_buff()) {
         return;
     }
-
-    frame = event->frame;
 
     if (array_len(files) < event->row) { return; }
 
@@ -437,9 +422,6 @@ static void _tree_view_line_handler(yed_event *event) {
     attr_archive     = ZERO_ATTR;
     attr_broken_link = ZERO_ATTR;
     attr_file        = ZERO_ATTR;
-    attr_lines       = ZERO_ATTR;
-
-    tc = !!yed_get_var("truecolor");
 
     if ((color_var = yed_get_var("tree-view-directory-color"))) {
         attr_dir         = yed_parse_attrs(color_var);
@@ -596,7 +578,7 @@ static file *_init_file(int parent_idx, char *path, char *name, int if_dir, int 
     file *f;
 
     f = malloc(sizeof(file));
-    memset(f, sizeof(file), '0');
+    memset(f, 0, sizeof(file));
 
     if (parent_idx == IS_ROOT) {
         f->parent = NULL;
