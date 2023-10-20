@@ -540,7 +540,9 @@ static void  _tree_view_update_handler(yed_event *event) {
 
         _tree_view_init();
 
+        int found;
         while (array_len(open_dirs) > 0) {
+            found = 0;
             path = *(char **)array_item(open_dirs, 0);
 
             idx = 0;
@@ -550,10 +552,15 @@ static void  _tree_view_update_handler(yed_event *event) {
                 if (strcmp((*f)->path, path) == 0) {
                     _tree_view_add_dir(idx);
                     array_delete(open_dirs, 0);
+                    found = 1;
                     break;
                 }
 
                 idx++;
+            }
+
+            if (!found) {
+                array_delete(open_dirs, 0);
             }
         }
 
