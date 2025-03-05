@@ -1,4 +1,6 @@
 *.so
 .yedrc
 .ccls-cache
+debug_build.sh
+compile_commands.json
 test_dir
