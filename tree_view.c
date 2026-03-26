@@ -15,8 +15,8 @@
 /* global structs */
 typedef struct {
     struct file *parent;
-    char         path[512];
-    char         name[512];
+    char         path[4096];
+    char         name[4096];
     int          flags;
     int          num_tabs;
     int          open_children;
@@ -182,6 +182,13 @@ static void _tree_view_init(void) {
     _tree_view_add_dir(0);
 }
 
+static int _has_suffix(const char *name, const char *ext) {
+    size_t nlen = strlen(name);
+    size_t elen = strlen(ext);
+    if (elen > nlen) { return 0; }
+    return strcasecmp(name + nlen - elen, ext) == 0;
+}
+
 static void _tree_view_add_dir(int idx) {
     char          **str_it;
     file          **f_it;
@@ -197,9 +204,9 @@ static void _tree_view_add_dir(int idx) {
     int             i;
     int             j;
     int             color_loc;
-    char            path[1024];
-    char            name[512];
-    char            write_name[512];
+    char            path[4096];
+    char            name[4096];
+    char            write_name[4096];
     struct stat     statbuf;
     array_t         tmp_files;
     int             loc;
@@ -232,12 +239,12 @@ static void _tree_view_add_dir(int idx) {
 
         f->open_children = 1;
 
-        memset(path, 0, sizeof(char[512]));
-        sprintf(path, "%s/%s", f->path, de->d_name);
+        memset(path, 0, sizeof(path));
+        snprintf(path, sizeof(path), "%s/%s", f->path, de->d_name);
 
         tabs = f->num_tabs+1;
-        memset(name, 0, sizeof(char[512]));
-        strcat(name, de->d_name);
+        memset(name, 0, sizeof(name));
+        snprintf(name, sizeof(name), "%s", de->d_name);
 
         dir = 0;
         if (lstat(path, &statbuf) == 0) {
@@ -250,6 +257,7 @@ static void _tree_view_add_dir(int idx) {
                     if (!fs && errno == 2) {
                         dir = IS_B_LINK;
                     } else {
+                        if (fs) { fclose(fs); }
                         dir = IS_LINK;
                     }
                     break;
@@ -262,14 +270,14 @@ static void _tree_view_add_dir(int idx) {
                         dir = IS_EXEC;
                     } else {
                         array_traverse(archive_extensions, str_it) {
-                            if (strstr(de->d_name, (*str_it))) {
+                            if (_has_suffix(de->d_name, (*str_it))) {
                                 dir = IS_ARCHIVE;
                                 goto break_switch;
                             }
                         }
 
                         array_traverse(image_extensions, str_it) {
-                            if (strstr(de->d_name, (*str_it))) {
+                            if (_has_suffix(de->d_name, (*str_it))) {
                                 dir = IS_IMAGE;
                                 goto break_switch;
                             }
@@ -299,7 +307,7 @@ cont:;
     loc = 0;
     array_traverse(tmp_files, f_it) {
         color_loc = (*f_it)->num_tabs * yed_get_tab_width();
-        memset(write_name, 0, sizeof(char[512]));
+        memset(write_name, 0, sizeof(write_name));
 
         if ((*f_it)->num_tabs > 0) {
             color_loc += 1;
@@ -551,6 +559,7 @@ static void  _tree_view_update_handler(yed_event *event) {
 
                 if (strcmp((*f)->path, path) == 0) {
                     _tree_view_add_dir(idx);
+                    free(path);
                     array_delete(open_dirs, 0);
                     found = 1;
                     break;
@@ -560,10 +569,12 @@ static void  _tree_view_update_handler(yed_event *event) {
             }
 
             if (!found) {
+                free(path);
                 array_delete(open_dirs, 0);
             }
         }
 
+        array_free(open_dirs);
         last_time = curr_time;
     }
 }
@@ -593,11 +604,11 @@ static file *_init_file(int parent_idx, char *path, char *name, int if_dir, int 
         f->parent = *(struct file **) array_item(files, parent_idx);
     }
 
-    memset(f->path, 0, sizeof(char[512]));
-    strcat(f->path, path);
+    memset(f->path, 0, sizeof(f->path));
+    strncpy(f->path, path, sizeof(f->path) - 1);
 
-    memset(f->name, 0, sizeof(char[512]));
-    strcat(f->name, name);
+    memset(f->name, 0, sizeof(f->name));
+    strncpy(f->name, name, sizeof(f->name) - 1);
 
     f->flags         = if_dir;
     f->num_tabs      = num_tabs;
@@ -620,8 +631,8 @@ static void _clear_files(void) {
 static int _cmpfunc(const void *a, const void *b) {
     file *left_f;
     file *right_f;
-    char  left_name[512];
-    char  right_name[512];
+    char  left_name[4096];
+    char  right_name[4096];
     int   left;
     int   right;
     int   loc;
@@ -644,8 +655,10 @@ static int _cmpfunc(const void *a, const void *b) {
     } else if (left > right) {
         return -1;
     } else {
-        strcpy(left_name, left_f->name);
-        strcpy(right_name, right_f->name);
+        strncpy(left_name, left_f->name, sizeof(left_name) - 1);
+        left_name[sizeof(left_name) - 1] = '\0';
+        strncpy(right_name, right_f->name, sizeof(right_name) - 1);
+        right_name[sizeof(right_name) - 1] = '\0';
 
         loc = 0;
         while (left_name[loc]) {
@@ -661,8 +674,6 @@ static int _cmpfunc(const void *a, const void *b) {
 
     	return strcmp(left_name, right_name);
     }
-
-    return ((file *)a)->flags - ((file *)b)->flags;
 }
 
 static void _add_hidden_items(void) {
@@ -673,17 +684,19 @@ static void _add_hidden_items(void) {
 
     if (array_len(hidden_items) > 0) {
         array_traverse(hidden_items, c_it) {
-            free(c_it);
+            free(*c_it);
         }
         array_clear(hidden_items);
     }
     hidden_items = array_make(char *);
-    token = strtok(yed_get_var("tree-view-hidden-items"), s);
+    tmp = strdup(yed_get_var("tree-view-hidden-items"));
+    token = strtok(tmp, s);
     while(token != NULL) {
-        tmp = strdup(token);
-        array_push(hidden_items, tmp);
+        char *dup = strdup(token);
+        array_push(hidden_items, dup);
         token = strtok(NULL, s);
     }
+    free(tmp);
 }
 
 static void _add_archive_extensions(void) {
@@ -695,7 +708,7 @@ static void _add_archive_extensions(void) {
 
     if (array_len(archive_extensions) > 0) {
         array_traverse(archive_extensions, c_it) {
-            free(c_it);
+            free(*c_it);
         }
         array_clear(archive_extensions);
     }
@@ -814,12 +827,14 @@ static void _add_archive_extensions(void) {
     str = strdup(".msi");     array_push(archive_extensions, str);
     str = strdup(".crx");     array_push(archive_extensions, str);
 
-    token = strtok(yed_get_var("tree-view-archive-extensions"), s);
+    tmp = strdup(yed_get_var("tree-view-archive-extensions"));
+    token = strtok(tmp, s);
     while(token != NULL) {
-        tmp = strdup(token);
-        array_push(archive_extensions, tmp);
+        char *dup = strdup(token);
+        array_push(archive_extensions, dup);
         token = strtok(NULL, s);
     }
+    free(tmp);
 }
 
 static void _add_image_extensions(void) {
@@ -831,7 +846,7 @@ static void _add_image_extensions(void) {
 
     if (array_len(image_extensions) > 0) {
         array_traverse(image_extensions, c_it) {
-            free(c_it);
+            free(*c_it);
         }
         array_clear(image_extensions);
     }
@@ -873,12 +888,14 @@ static void _add_image_extensions(void) {
     str = strdup(".eps");  array_push(image_extensions, str);
     str = strdup(".pdf");  array_push(image_extensions, str);
 
-    token = strtok(yed_get_var("tree-view-image-extensions"), s);
+    tmp = strdup(yed_get_var("tree-view-image-extensions"));
+    token = strtok(tmp, s);
     while(token != NULL) {
-        tmp = strdup(token);
-        array_push(image_extensions, tmp);
+        char *dup = strdup(token);
+        array_push(image_extensions, dup);
         token = strtok(NULL, s);
     }
+    free(tmp);
 }
 
 static void _tree_view_unload(yed_plugin *self) {
