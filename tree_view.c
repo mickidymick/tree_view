@@ -914,6 +914,7 @@ static yed_buffer *_get_or_make_preview_buff(void) {
     buff = yed_get_buffer("*tree-view-preview*");
     if (buff == NULL) {
         buff = yed_create_buffer("*tree-view-preview*");
+        buff->kind   = BUFF_KIND_FILE;
         buff->flags |= BUFF_RD_ONLY | BUFF_SPECIAL | BUFF_NO_MOD_EVENTS;
     }
 
@@ -952,9 +953,7 @@ static void _tree_view_cursor_moved_handler(yed_event *event) {
 
     f = *(file **)array_item(files, tree_frame->cursor_line);
 
-    if (f->flags != IS_FILE && f->flags != IS_EXEC
-    &&  f->flags != IS_IMAGE && f->flags != IS_ARCHIVE
-    &&  f->flags != IS_LINK) {
+    if (f->flags != IS_FILE) {
         _tree_view_close_preview();
         return;
     }
@@ -994,8 +993,25 @@ static void _tree_view_cursor_moved_handler(yed_event *event) {
     }
     fclose(fp);
 
+    if (preview_buff->path) { free(preview_buff->path); }
+    preview_buff->path = strdup(f->path);
+
     preview_buff->flags |= BUFF_RD_ONLY;
     yed_frame_set_buff(preview_frame, preview_buff);
+
+    {
+        yed_event ft_event;
+
+        preview_buff->ft    = FT_UNKNOWN;
+        preview_buff->flags &= ~BUFF_SPECIAL;
+
+        memset(&ft_event, 0, sizeof(ft_event));
+        ft_event.kind   = EVENT_BUFFER_POST_LOAD;
+        ft_event.buffer = preview_buff;
+        yed_trigger_event(&ft_event);
+
+        preview_buff->flags |= BUFF_SPECIAL;
+    }
 }
 
 static void _tree_view_unload(yed_plugin *self) {
