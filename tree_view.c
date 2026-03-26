@@ -31,6 +31,8 @@ static array_t     archive_extensions;
 static array_t     files;
 static time_t      last_time;
 static time_t      wait_time;
+static yed_frame  *preview_frame;
+static int         last_preview_line;
 
 /* internal functions*/
 static void        _tree_view(int n_args, char **args);
@@ -41,6 +43,7 @@ static void        _tree_view_select(void);
 static void        _tree_view_line_handler(yed_event *event);
 static void        _tree_view_key_pressed_handler(yed_event *event);
 static void        _tree_view_update_handler(yed_event *event);
+static void        _tree_view_cursor_moved_handler(yed_event *event);
 static void        _tree_view_unload(yed_plugin *self);
 
 /* internal helper functions */
@@ -57,6 +60,7 @@ int yed_plugin_boot(yed_plugin *self) {
     yed_event_handler tree_view_key;
     yed_event_handler tree_view_line;
     yed_event_handler tree_view_update;
+    yed_event_handler tree_view_cursor;
 
     YED_PLUG_VERSION_CHECK();
 
@@ -139,6 +143,12 @@ int yed_plugin_boot(yed_plugin *self) {
     tree_view_update.fn   = _tree_view_update_handler;
     yed_plugin_add_event_handler(self, tree_view_update);
 
+    tree_view_cursor.kind = EVENT_CURSOR_POST_MOVE;
+    tree_view_cursor.fn   = _tree_view_cursor_moved_handler;
+    yed_plugin_add_event_handler(self, tree_view_cursor);
+
+    preview_frame      = NULL;
+    last_preview_line  = -1;
 
     return 0;
 }
@@ -898,9 +908,101 @@ static void _add_image_extensions(void) {
     free(tmp);
 }
 
+static yed_buffer *_get_or_make_preview_buff(void) {
+    yed_buffer *buff;
+
+    buff = yed_get_buffer("*tree-view-preview*");
+    if (buff == NULL) {
+        buff = yed_create_buffer("*tree-view-preview*");
+        buff->flags |= BUFF_RD_ONLY | BUFF_SPECIAL | BUFF_NO_MOD_EVENTS;
+    }
+
+    return buff;
+}
+
+static void _tree_view_close_preview(void) {
+    if (preview_frame != NULL) {
+        yed_delete_frame(preview_frame);
+        preview_frame     = NULL;
+        last_preview_line = -1;
+    }
+}
+
+static void _tree_view_cursor_moved_handler(yed_event *event) {
+    yed_frame  *tree_frame;
+    yed_buffer *preview_buff;
+    file       *f;
+    FILE       *fp;
+    char        line_buf[4096];
+    int         row;
+    int         max_lines;
+
+    if (event->frame         == NULL
+    ||  event->frame->buffer == NULL
+    ||  event->frame->buffer != _get_or_make_buff()) {
+        return;
+    }
+
+    tree_frame = event->frame;
+
+    if (tree_frame->cursor_line == last_preview_line) { return; }
+    last_preview_line = tree_frame->cursor_line;
+
+    if ((int)array_len(files) <= tree_frame->cursor_line) { return; }
+
+    f = *(file **)array_item(files, tree_frame->cursor_line);
+
+    if (f->flags != IS_FILE && f->flags != IS_EXEC
+    &&  f->flags != IS_IMAGE && f->flags != IS_ARCHIVE
+    &&  f->flags != IS_LINK) {
+        _tree_view_close_preview();
+        return;
+    }
+
+    if (preview_frame == NULL) {
+        preview_frame = yed_vsplit_frame(tree_frame);
+        yed_activate_frame(tree_frame);
+    }
+
+    preview_buff = _get_or_make_preview_buff();
+    preview_buff->flags &= ~BUFF_RD_ONLY;
+    yed_buff_clear_no_undo(preview_buff);
+
+    fp = fopen(f->path, "r");
+    if (fp == NULL) {
+        yed_buff_insert_string_no_undo(preview_buff, "[cannot open file]", 1, 1);
+        preview_buff->flags |= BUFF_RD_ONLY;
+        yed_frame_set_buff(preview_frame, preview_buff);
+        return;
+    }
+
+    max_lines = preview_frame->height;
+    row       = 1;
+    while (row <= max_lines && fgets(line_buf, sizeof(line_buf), fp) != NULL) {
+        int len = strlen(line_buf);
+        if (len > 0 && line_buf[len - 1] == '\n') {
+            line_buf[len - 1] = '\0';
+            len -= 1;
+        }
+        if (row > 1) {
+            yed_buff_insert_line_no_undo(preview_buff, row);
+        }
+        if (len > 0) {
+            yed_buff_insert_string_no_undo(preview_buff, line_buf, row, 1);
+        }
+        row++;
+    }
+    fclose(fp);
+
+    preview_buff->flags |= BUFF_RD_ONLY;
+    yed_frame_set_buff(preview_frame, preview_buff);
+}
+
 static void _tree_view_unload(yed_plugin *self) {
     char **c_it;
     file **file_it;
+
+    _tree_view_close_preview();
 
     if (array_len(files) > 0) {
         array_traverse(files, file_it) {
