@@ -956,7 +956,8 @@ static void _tree_view_cursor_moved_handler(yed_event *event) {
 
     f = *(file **)array_item(files, tree_frame->cursor_line);
 
-    if (f->flags != IS_FILE) {
+    if (f->flags != IS_FILE && f->flags != IS_EXEC
+    &&  f->flags != IS_LINK) {
         _tree_view_close_preview();
         return;
     }
