@@ -935,8 +935,11 @@ static void _tree_view_cursor_moved_handler(yed_event *event) {
     file       *f;
     FILE       *fp;
     char        line_buf[4096];
+    char        check_buf[512];
+    size_t      n;
     int         row;
     int         max_lines;
+    int         i;
 
     if (event->frame         == NULL
     ||  event->frame->buffer == NULL
@@ -974,6 +977,17 @@ static void _tree_view_cursor_moved_handler(yed_event *event) {
         yed_frame_set_buff(preview_frame, preview_buff);
         return;
     }
+
+    /* Check for binary content (NUL bytes). */
+    n = fread(check_buf, 1, sizeof(check_buf), fp);
+    for (i = 0; (size_t)i < n; i++) {
+        if (check_buf[i] == '\0') {
+            fclose(fp);
+            _tree_view_close_preview();
+            return;
+        }
+    }
+    rewind(fp);
 
     max_lines = preview_frame->height;
     row       = 1;
